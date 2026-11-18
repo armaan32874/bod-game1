@@ -1,0 +1,91 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<title>BOD 3D</title>
+<style>
+*{box-sizing:border-box}html,body{margin:0;width:100%;height:100%;overflow:hidden;background:#020611;color:#fff;font-family:system-ui,-apple-system,Arial;touch-action:none}
+canvas{position:fixed;inset:0;width:100%;height:100%;display:block}
+#hud{position:fixed;top:12px;left:12px;right:12px;display:flex;justify-content:space-between;font-weight:900;text-shadow:0 2px 5px #000;pointer-events:none}
+#overlay{position:fixed;inset:0;display:flex;align-items:center;justify-content:center;background:#020817aa;padding:24px}
+.panel{width:min(90vw,390px);padding:26px 20px;border:1px solid #5a8acb;border-radius:20px;background:linear-gradient(160deg,#172b4c,#07101f);text-align:center;box-shadow:0 15px 50px #0009}
+h1{font-size:42px;letter-spacing:5px;margin:0 0 5px;color:#9bd7ff}p{color:#c5d8ee;line-height:1.45}
+button{border:0;border-radius:14px;background:#1c9bff;color:white;font-weight:900;font-size:20px;padding:15px 30px;min-width:150px;box-shadow:0 5px 0 #07528d}
+button:active{transform:translateY(3px);box-shadow:0 2px 0 #07528d}
+#controls{position:fixed;bottom:18px;left:0;right:0;display:none;justify-content:space-between;align-items:end;padding:0 18px;pointer-events:none}
+.pad{display:grid;grid-template-columns:58px 58px;gap:7px;pointer-events:auto}
+.ctrl{min-width:0;width:58px;height:58px;padding:0;background:#244b75dd;border:1px solid #8bcaff;color:white;font-size:25px;box-shadow:0 3px 0 #102b48}
+#fire{pointer-events:auto;width:94px;height:94px;border-radius:50%;background:#e34b53;border:2px solid #ffb2b2;font-size:17px;box-shadow:0 5px 0 #8b2028}
+.small{font-size:13px;color:#a9c3df}
+</style>
+</head>
+<body>
+<canvas id="game"></canvas>
+<div id="hud"><span id="score">SCORE 0</span><span id="lives">LIVES 3</span></div>
+<div id="overlay"><div class="panel"><h1>BOD 3D</h1><p>FULL 3D SPACE DEFENDER<br><span class="small">Move left and right. Tap FIRE to shoot.</span></p><button id="start">START GAME</button></div></div>
+<div id="controls"><div class="pad"><button class="ctrl" id="left">◀</button><button class="ctrl" id="right">▶</button></div><button id="fire">FIRE</button></div>
+<script>
+(()=>{'use strict';
+const canvas=document.getElementById('game'),ctx=canvas.getContext('2d');
+const overlay=document.getElementById('overlay'),startBtn=document.getElementById('start'),controls=document.getElementById('controls');
+const scoreEl=document.getElementById('score'),livesEl=document.getElementById('lives');
+let W=0,H=0,D=1,running=false,score=0,lives=3,playerX=0,shots=[],foes=[],stars=[],keys={left:false,right:false,fire:false},last=0,spawn=0,raf=0,shotClock=0;
+const camera={y:3.1,z:-9,fov:520};
+const V=(x,y,z)=>[x,y,z];
+function resize(){D=Math.min(devicePixelRatio||1,2);W=innerWidth;H=innerHeight;canvas.width=W*D;canvas.height=H*D;ctx.setTransform(D,0,0,D,0,0);camera.fov=Math.min(W,H)*1.05;stars=Array.from({length:100},()=>({x:(Math.random()-.5)*28,y:Math.random()*15-2,z:Math.random()*22+2}));render();}
+addEventListener('resize',resize);
+function project(p){const z=p[2]-camera.z;if(z<.1)return null;const k=camera.fov/z;return [W/2+p[0]*k,H*.42-(p[1]-camera.y)*k,k];}
+function poly(vertices,color,stroke){const pts=vertices.map(project);if(pts.some(p=>!p))return;ctx.beginPath();ctx.moveTo(pts[0][0],pts[0][1]);for(let i=1;i<pts.length;i++)ctx.lineTo(pts[i][0],pts[i][1]);ctx.closePath();ctx.fillStyle=color;ctx.fill();if(stroke){ctx.strokeStyle=stroke;ctx.lineWidth=1.2;ctx.stroke();}}
+function line(a,b,color,width=1){const p=project(a),q=project(b);if(!p||!q)return;ctx.beginPath();ctx.moveTo(...p);ctx.lineTo(...q);ctx.strokeStyle=color;ctx.lineWidth=width;ctx.stroke();}
+function ship(x,z,scale,color){
+ const v=[V(x,0,z-1.25*scale),V(x+.42*scale,-.12*scale,z+.65*scale),V(x,.18*scale,z+.28*scale),V(x-.42*scale,-.12*scale,z+.65*scale),V(x,.55*scale,z+.25*scale)];
+ poly([v[0],v[1],v[4]],color,'#a6eaff');poly([v[0],v[4],v[3]],'#1976c5','#8bdcff');poly([v[1],v[2],v[4]],'#0d4c91');poly([v[2],v[3],v[4]],'#1467aa');
+ poly([V(x-.12*scale,-.1*scale,z+.5*scale),V(x+.12*scale,-.1*scale,z+.5*scale),V(x,.48*scale,z+.28*scale)],'#b8f7ff');
+ line(V(x-.2*scale,-.18*scale,z+.7*scale),V(x-.2*scale,-.55*scale,z+1.1*scale),'#38dfff',3);
+ line(V(x+.2*scale,-.18*scale,z+.7*scale),V(x+.2*scale,-.55*scale,z+1.1*scale),'#38dfff',3);
+}
+function enemy(e){const x=e.x,y=e.y,z=e.z,s=e.s;
+ const a=V(x,y,z-.65*s),b=V(x+.8*s,y-.1*s,z+.45*s),c=V(x+.25*s,y+.12*s,z+.15*s),d=V(x-.25*s,y+.12*s,z+.15*s),f=V(x-.8*s,y-.1*s,z+.45*s),top=V(x,y+.48*s,z+.2*s);
+ poly([a,b,top], '#bd2949','#ff9aab');poly([a,top,f],'#7b1d43','#ff8096');poly([b,c,top],'#f04a61');poly([f,top,d],'#9b244d');poly([c,d,top],'#ff6479');
+}
+function render(){
+ ctx.clearRect(0,0,W,H);const bg=ctx.createLinearGradient(0,0,0,H);bg.addColorStop(0,'#10284b');bg.addColorStop(.55,'#071326');bg.addColorStop(1,'#01040b');ctx.fillStyle=bg;ctx.fillRect(0,0,W,H);
+ // stars in 3D space
+ for(const s of stars){const p=project([s.x,s.y,s.z]);if(p){ctx.fillStyle='rgba(190,225,255,.8)';ctx.fillRect(p[0],p[1],Math.max(1,p[2]*.012),Math.max(1,p[2]*.012));}}
+ // perspective floor grid, all lines are 3D world coordinates
+ for(let z=1;z<30;z+=1.2){line(V(-12,-1,z),V(12,-1,z),'#17375b');}
+ for(let x=-12;x<=12;x+=1.5)line(V(x,-1,1),V(x,-1,30),'#17375b');
+ // distant horizon glow
+ const grd=ctx.createRadialGradient(W/2,H*.43,1,W/2,H*.43,W*.5);grd.addColorStop(0,'#2b83bf33');grd.addColorStop(1,'#09204700');ctx.fillStyle=grd;ctx.fillRect(0,0,W,H);
+ foes.slice().sort((a,b)=>b.z-a.z).forEach(enemy);
+ for(const b of shots){line(V(b.x,0,b.z),V(b.x,.04,b.z-.8),'#8ef7ff',3);}
+ ship(playerX,-1.5,1.05,'#168ee8');
+}
+function reset(){score=0;lives=3;playerX=0;shots=[];foes=[];spawn=0;shotClock=0;scoreEl.textContent='SCORE 0';livesEl.textContent='LIVES 3';}
+function start(){cancelAnimationFrame(raf);reset();overlay.style.display='none';controls.style.display='flex';running=true;last=performance.now();raf=requestAnimationFrame(loop);}
+function end(){running=false;cancelAnimationFrame(raf);controls.style.display='none';overlay.style.display='flex';overlay.querySelector('h1').textContent='GAME OVER';overlay.querySelector('p').innerHTML='FINAL SCORE: '+score+'<br><span class="small">Tap below to play again.</span>';startBtn.textContent='PLAY AGAIN';}
+function loop(t){if(!running)return;const dt=Math.min((t-last)/1000,.04);last=t;
+ if(keys.left)playerX-=dt*5;if(keys.right)playerX+=dt*5;playerX=Math.max(-4.5,Math.min(4.5,playerX));
+ if(keys.fire&&t-shotClock>230){shots.push({x:playerX,z:1.2});shotClock=t;}
+ shots.forEach(b=>b.z+=dt*19);shots=shots.filter(b=>b.z<30);
+ spawn+=dt;if(spawn>Math.max(.48,1.15-score*.002)){spawn=0;foes.push({x:(Math.random()-.5)*8,y:(Math.random()-.5)*1.4,z:24,s:.55+Math.random()*.35,speed:4+Math.random()*1.5});}
+ for(let i=foes.length-1;i>=0;i--){const e=foes[i];e.z-=e.speed*dt;let hit=false;
+ for(let j=shots.length-1;j>=0;j--){const b=shots[j];if(Math.abs(b.x-e.x)<.8*e.s&&Math.abs(b.z-e.z)<1.0*e.s){shots.splice(j,1);hit=true;score+=10;scoreEl.textContent='SCORE '+score;break;}}
+ if(hit){foes.splice(i,1);continue;}
+ if(e.z<-.1){foes.splice(i,1);lives--;livesEl.textContent='LIVES '+lives;if(lives<=0){end();return;}}
+ }
+ // stars drift toward the camera to reinforce forward motion
+ for(const s of stars){s.z-=dt*3;if(s.z<1){s.z=22;s.x=(Math.random()-.5)*28;s.y=Math.random()*15-2;}}
+ render();raf=requestAnimationFrame(loop);
+}
+startBtn.addEventListener('click',start);
+function hold(id,k){const el=document.getElementById(id),on=e=>{e.preventDefault();keys[k]=true;},off=e=>{e.preventDefault();keys[k]=false;};el.addEventListener('pointerdown',on);el.addEventListener('pointerup',off);el.addEventListener('pointercancel',off);el.addEventListener('pointerleave',off);}
+hold('left','left');hold('right','right');hold('fire','fire');
+addEventListener('keydown',e=>{if(e.key==='ArrowLeft'||e.key==='a')keys.left=true;if(e.key==='ArrowRight'||e.key==='d')keys.right=true;if(e.code==='Space')keys.fire=true;});
+addEventListener('keyup',e=>{if(e.key==='ArrowLeft'||e.key==='a')keys.left=false;if(e.key==='ArrowRight'||e.key==='d')keys.right=false;if(e.code==='Space')keys.fire=false;});
+resize();
+})();
+</script>
+</body></html>
